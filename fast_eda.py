@@ -78,12 +78,15 @@ def explore_missing(dataframe, target=''):
         mean_i = np.mean(dataframe.loc[dataframe['incomplete'] == 1, target].values)
         print('default ratio for more complete: {:.2} \ndefault ratio for less complete: {:.2}'.format(mean_c, mean_i))
 
-    msno.matrix(dataframe.sample(500), inline=False, sparkline=True, figsize=(20,10), sort=None)
+    sample_size = min(dataframe.shape[0],500)
+    msno.matrix(dataframe.sample(sample_size), inline=False, sparkline=True, figsize=(20,10), sort=None)
     plt.title('msno.matrix')
     plt.tight_layout
     plt.savefig(sourcefilepath+'msno.matrix.png')
 
-    msno.heatmap(dataframe,fontsize=16,figsize=(40,20))
+    scale = dataframe.shape[1]/30+1
+    fig_size = (20*scale,10*scale)    
+    msno.heatmap(dataframe,fontsize=16,figsize=fig_size)
     plt.title('msno.heatmap')
     plt.tight_layout
     plt.savefig(sourcefilepath+'msno.heatmap.png')
@@ -144,7 +147,9 @@ def explore_corr(dataframe,target=''):
     Storage path is define with setFileInfo(file_path,file_name)
     """
     corr = dataframe.corr()
-    plt.figure(figsize=(80,80))
+    scale = dataframe.shape[1]/30+1
+    fig_size = (20*scale,20*scale)
+    plt.figure(figsize=fig_size)
     sns.heatmap(corr,linewidths=1,cmap='viridis_r')
     plt.title('pearson.correlation.heatmap')
     plt.tight_layout
@@ -155,7 +160,7 @@ def explore_corr(dataframe,target=''):
             # print out the correlation
             print('The Corr with target',corr_target[target].head(30), file=text_file)
  
-def explore_missing_col_corr(dataframe, ratio=0.5,target=''):
+def explore_missing_col_corr(dataframe, ratio=0.6,target=''):
     """
     Generate columns with missing status of each column and explore correlation
     between generated columns and original columns. With the additional columns
@@ -188,8 +193,10 @@ def explore_missing_col_corr(dataframe, ratio=0.5,target=''):
     # remain_columns = [f_ for f_ in dataframe.columns.values if f_ not in missing_columns]
     # remain_dataframe = dataframe[remain_columns]
     merged_dataframe = pd.concat([dataframe,missing_dataframe],axis=1)
-
-    plt.figure(figsize=(80,80))
+    
+    scale = dataframe.shape[1]/30+1
+    fig_size = (20*scale,20*scale)  
+    plt.figure(figsize=fig_size)
     corr = merged_dataframe.corr()
     # corr = remain_dataframe.corrwith(missing_dataframe)
     sns.heatmap(corr,linewidths=1,cmap='viridis_r')
@@ -202,7 +209,30 @@ def explore_missing_col_corr(dataframe, ratio=0.5,target=''):
         # corr_target = corr_target[missing_columns]        
         with open(sourcefilepath+textfilename, "a+") as text_file:
             print('The missing.Corr with target',corr_target[target].head(30), file=text_file)
- 
+
+def explore_importance_features(dataframe, target, method='random forest'):
+    from sklearn import preprocessing
+    from sklearn.ensemble import RandomForestClassifier
+
+    categorical_feats = [
+        f for f in dataframe.columns if dataframe[f].dtype == 'object'
+    ]
+
+    for col in categorical_feats:
+        lb = preprocessing.LabelEncoder()
+        lb.fit(list(dataframe[col].values.astype('str')))
+        dataframe[col] = lb.transform(list(dataframe[col].values.astype('str')))
+
+    dataframe.fillna(-999, inplace = True)
+    rf = RandomForestClassifier(n_estimators=50, max_depth=8, min_samples_leaf=4, max_features=0.5, random_state=2018)
+    rf.fit(dataframe.drop([target],axis=1), dataframe[target])
+    features = dataframe.drop([target],axis=1).columns.values
+
+    importance_df = pd.DataFrame()
+    importance_df['feature'] = features
+    importance_df['importance'] = rf.feature_importances_
+    importance_df.sort_values('importance',inplace=True,ascending=False)
+    
 
 def explore_importance(dataframe, target, method='random forest'):
     """
@@ -229,6 +259,7 @@ def explore_importance(dataframe, target, method='random forest'):
 
     from sklearn import preprocessing
     from sklearn.ensemble import RandomForestClassifier
+    from sklearn.ensemble import RandomForestRegressor
 
     categorical_feats = [
         f for f in dataframe.columns if dataframe[f].dtype == 'object'
@@ -240,8 +271,13 @@ def explore_importance(dataframe, target, method='random forest'):
         dataframe[col] = lb.transform(list(dataframe[col].values.astype('str')))
 
     dataframe.fillna(-999, inplace = True)
+    sample_size = min(1000, dataframe.shape[0])
+    predict_classifier = dataframe[target].sample(sample_size).nunique() <= 2
+        
     rf = RandomForestClassifier(n_estimators=50, max_depth=8, min_samples_leaf=4, max_features=0.5, random_state=2018)
-    rf.fit(dataframe.drop([target],axis=1), dataframe.TARGET)
+    if predict_classifier == False:
+        rf = RandomForestRegressor(n_estimators=50, max_depth=8, min_samples_leaf=4, max_features=0.5, random_state=2018)
+    rf.fit(dataframe.drop([target],axis=1), dataframe[target])
     features = dataframe.drop([target],axis=1).columns.values
 
     importance_df = pd.DataFrame()
@@ -331,17 +367,18 @@ def explore_numeric_dist(dataframe, feature, target=''):
     """
     plt.figure(figsize=(12,6))
     plt.title("Distribution of "+ feature)
-    mean = dataframe[feature].dropna().mean()
-    # if feature != target and abs(mean)<10:
-    #     dataframe[feature] = dataframe[feature]*100
-    factor = -2 if mean>=0 else 2
-    dataframe[feature+fillna] = dataframe[feature].fillna(factor*max(abs(dataframe[feature].dropna()))).apply(lambda x:round(x))
+    new_feature = feature
+    if dataframe[feature].isnull().sum() > 1:
+        new_feature = dataframe.isnull().sum(axis=1)
+        mean = dataframe[feature].dropna().mean()
+        factor = -2 if mean>=0 else 2
+        dataframe[new_feature] = dataframe[feature].fillna(factor*max(abs(dataframe[feature].dropna())))
 
-    ax = sns.distplot(dataframe[feature+fillna])
+    ax = sns.distplot(dataframe[new_feature])
     plt.tight_layout
     plt.savefig(sourcefilepath+feature.replace('/','_')+'.dist.png')
 
-    if target != '':
+    if target != '' and feature != target and dataframe[target].nunique == 2:
         kde_with_target_numeric(dataframe, feature, target)
 
 
@@ -409,7 +446,7 @@ def explore_nominal_dist(dataframe, feature, target=''):
     #plt.tight_layout
     plt.savefig(sourcefilepath+feature.replace('/','_')+'.pie.png')
 
-    if target!='':
+    if target != '' and feature != target and dataframe[target].nunique == 2:
         dist_with_target_nominal(dataframe, feature, target)   
 
 def explore_dist(dataframe,target=''):
@@ -490,6 +527,55 @@ def explore_aggr(dataframe, base_col, aggr_cols='', interval=1):
     del dataframe_enc, dataframe_agg
     gc.collect()
 
+def explore_scatter(dataframe, axis_col, scatter_cols=''):
+    """
+    Explore data along axis_col, like time or some order.
+    
+    Parameters
+    ----------
+    dataframe : pandas.Dataframe
+        dataframe to explore
+    axis_col : string
+        feature name, as series axis
+    scatter_cols : string array, optional
+        Feature name array, which are explored with axis_col.
+        Only number features are supported.
+        If not specified, all features except base_col are explored.
+
+    Output
+    -------
+    Image of feature data scatter
+    Storage path is define with setFileInfo(file_path,file_name)
+    """
+    if scatter_cols == '':
+        scatter_cols = [col for col in dataframe.columns]
+    else:
+        scatter_cols.append(axis_col)
+        
+    
+    # if aggr_cols.count > 10:
+    #     return
+    df = dataframe[scatter_cols]
+
+    for col in df.columns:
+        if col == axis_col or df[col].dtype=='object':
+            continue        
+        plt.figure(figsize=(12,6))
+        plt.title("Sequence of "+ axis_col+'_'+col)
+        plt.xlabel(axis_col, size = 22);
+        plt.ylabel(col, size = 22)
+        min_x = np.min(df[axis_col])
+        max_x = np.max(df[axis_col])
+        plt.xlim((min_x, max_x))
+        plt.xticks(np.arange(min_x, max_x, (max_x-min_x)/10))
+        plt.plot(df[axis_col], df[col],  'bo', alpha = 0.5)
+        y_line = df[col][np.argmin(df[axis_col])]
+        vertical_len = df[axis_col].nunique()
+        plt.hlines(y_line, 0, vertical_len, linestyles = '--', colors = 'r')
+        plt.savefig(sourcefilepath+axis_col.replace('/','_')+'.'+col.replace('/','_')+'.scatter.png')
+
+    gc.collect()
+
 
 sourcefilename='somefile.csv'
 sourcefilepath='e://eda/'
@@ -546,8 +632,10 @@ def explore_general(dataframe, target=''):
     Statistic info is stored in filepath/EDA/filename/eda.txt
     """
     explore_glimpse(dataframe)
-    explore_missing(dataframe, target)
-    explore_preprocess(dataframe)
+    total = dataframe.isnull().sum().sort_values(ascending = False)
+    if total[0] > 0:
+        explore_missing(dataframe, target)
+    dataframe = explore_preprocess(dataframe)
     explore_missing_col_corr(dataframe,0.6,target)
     explore_corr(dataframe)
     if target != '':
